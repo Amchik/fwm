@@ -1,0 +1,11 @@
+[package]
+name = "fwm-as"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = []
+no-std = []
+
+[dependencies]
+hashbrown = "0.13.2"

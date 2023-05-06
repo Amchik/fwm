@@ -1,0 +1,15 @@
+[package]
+name = "fwm-as-vmgen"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+default = [ 'default-as' ]
+
+default-as = [ 'dep:fwm-as' ]
+default-vm = [ 'dep:fwm-base' ]
+
+[dependencies]
+fwm-as = { path = "../fwm-as", optional = true }
+fwm-base = { path = "../fwm-base", optional = true }
+

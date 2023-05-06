@@ -1,0 +1,3 @@
+[build]
+target = "fwm-web/index.html"
+#release = true

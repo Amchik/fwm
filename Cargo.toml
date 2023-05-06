@@ -1,0 +1,24 @@
+#[package]
+#name = "fwm"
+#version = "0.1.0"
+#edition = "2021"
+
+[workspace]
+members = [ "fwm-base", "fwm-base-proc-tolower", "fwm-as", "fwm-as-vmgen", "fwmc" ]
+exclude = [ "fwm-web" ]
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+
+#[[bin]]
+#name = "fwmc"
+#path = "fwmc/src/main.rs"
+
+#[dependencies]
+#clap = { version = "4.2", features = [ "derive" ] }
+#
+#fwm-base = { path = "fwm-base/" }
+#fwm-as = { path = "fwm-as/" }
