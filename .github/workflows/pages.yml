@@ -27,7 +27,7 @@ jobs:
       - name: Install target wasm32-unknown-unknown
         run: rustup target add wasm32-unknown-unknown
       - name: Build
-        run: trunk build --release
+        run: trunk build --release --public-url fwm/
       - name: Setup Pages
         uses: actions/configure-pages@v3
       - name: Upload artifact
