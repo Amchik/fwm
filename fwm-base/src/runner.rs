@@ -10,13 +10,30 @@ use crate::{
     vm::{RegisterKind, VMContext},
 };
 
+pub trait FWMRunnable {
+    /// Run opcode in context without steping.
+    fn run_in_context(&mut self, opcode: &OPCode) -> FWMSignal;
+
+    /// Get current position
+    fn get_pos(&self) -> u64;
+
+    /// Set current position
+    fn set_pos(&mut self, v: u64);
+
+    /// Step one line
+    #[inline(always)]
+    fn step(&mut self) {
+        self.set_pos(self.get_pos() + 1);
+    }
+}
+
 /// FWM simple runner
 ///
 /// # Example
 /// See [parser module](../parser/index.html) doc for parsing. Here `parse_code` is just example.
 /// ```
 /// # use fwm_base::{runner::{FWMRunner, FWMSignal}, parser::*, opcode::*, vm::*};
-/// # 
+/// #
 /// # fn parse_code(s: &[u8]) -> Vec<OPCode> {
 /// #    Parser::new(s)
 /// #        .into_iter()
@@ -42,9 +59,9 @@ use crate::{
 /// assert_eq!(fwm.context.get_register(RegisterKind::FA(0)), 0x14);
 /// ```
 #[derive(Debug)]
-pub struct FWMRunner {
+pub struct FWMRunner<C: FWMRunnable = VMContext> {
     pub lines: Vec<OPCode>,
-    pub context: VMContext,
+    pub context: C,
 }
 /// Type of returned signal
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -67,7 +84,9 @@ impl FWMRunner {
             context: VMContext::new(),
         }
     }
+}
 
+impl<C: FWMRunnable> FWMRunner<C> {
     /// Execute one line and go to next
     ///
     /// # Example usage
@@ -97,13 +116,18 @@ impl FWMRunner {
     /// assert_eq!(sig, FWMSignal::EOF);
     /// ```
     pub fn run(&mut self) -> FWMSignal {
-        let local = self.context.get_local();
-        let Some(opcode) = self.lines.get(local.pos) else {
+        let Some(opcode) = self.lines.get(self.context.get_pos() as usize) else {
             return FWMSignal::EOF;
         };
-        let mut data = None;
 
-        self.context.get_local_mut().pos += 1;
+        self.context.step();
+
+        self.context.run_in_context(opcode)
+    }
+}
+impl FWMRunnable for VMContext {
+    fn run_in_context(&mut self, opcode: &OPCode) -> FWMSignal {
+        let mut data = None;
 
         match opcode {
             OPCode::Die(_) => {
@@ -113,17 +137,17 @@ impl FWMRunner {
                 return FWMSignal::EOF;
             }
             OPCode::Ret(_) => {
-                if self.context.local.len() == 1 {
+                if self.local.len() == 1 {
                     return FWMSignal::Signaled;
                 }
-                self.context.pop_function();
+                self.pop_function();
             }
 
             OPCode::Call([pos]) => {
-                let Some(pos) = self.context.get_value(*pos) else {
+                let Some(pos) = self.get_value(*pos) else {
                     return FWMSignal::Signaled;
                 };
-                self.context.push_function(pos as usize);
+                self.push_function(pos as usize);
                 return FWMSignal::Continue;
             }
             OPCode::Jmp([pos])
@@ -133,10 +157,7 @@ impl FWMRunner {
             | OPCode::Jmge([pos])
             | OPCode::Jmlt([pos])
             | OPCode::Jmle([pos]) => 'brk: {
-                let (kind, cmp) = (
-                    opcode.opcode(),
-                    self.context.get_register(RegisterKind::CMP),
-                );
+                let (kind, cmp) = (opcode.opcode(), self.get_register(RegisterKind::CMP));
                 let cont = match kind {
                     OPCodeKind::Jmp => true,
                     OPCodeKind::Jme => cmp == 0,
@@ -152,10 +173,10 @@ impl FWMRunner {
                     break 'brk;
                 }
 
-                let Some(pos) = self.context.get_value(*pos) else {
+                let Some(pos) = self.get_value(*pos) else {
                     return FWMSignal::Signaled;
                 };
-                self.context.get_local_mut().pos = pos as usize;
+                self.get_local_mut().pos = pos as usize;
                 return FWMSignal::Continue;
             }
 
@@ -164,7 +185,7 @@ impl FWMRunner {
                 if VMContext::is_readonly(*dest) {
                     return FWMSignal::Signaled;
                 }
-                let Some(val) = self.context.get_value(*dest) else {
+                let Some(val) = self.get_value(*dest) else {
                     return FWMSignal::Signaled;
                 };
                 let val = match kind {
@@ -173,7 +194,7 @@ impl FWMRunner {
 
                     _ => unreachable!(),
                 };
-                if self.context.set_value(*dest, val).is_none() {
+                if self.set_value(*dest, val).is_none() {
                     return FWMSignal::Signaled;
                 }
             }
@@ -182,7 +203,7 @@ impl FWMRunner {
             | OPCode::Movd([dest, src])
             | OPCode::Movw([dest, src])
             | OPCode::Movb([dest, src]) => {
-                let Some(val) = self.context.get_value(*src) else {
+                let Some(val) = self.get_value(*src) else {
                     return FWMSignal::Signaled;
                 };
                 if VMContext::is_readonly(*dest) {
@@ -196,7 +217,7 @@ impl FWMRunner {
 
                     _ => unreachable!(),
                 };
-                if self.context.set_bytes_value(*dest, val, blen).is_none() {
+                if self.set_bytes_value(*dest, val, blen).is_none() {
                     return FWMSignal::Signaled;
                 }
             }
@@ -215,7 +236,7 @@ impl FWMRunner {
                 if VMContext::is_readonly(*dest) {
                     return FWMSignal::Signaled;
                 }
-                let (Some(lhs), Some(rhs)) = (self.context.get_value(*dest), self.context.get_value(*src)) else {
+                let (Some(lhs), Some(rhs)) = (self.get_value(*dest), self.get_value(*src)) else {
                     return FWMSignal::Signaled;
                 };
                 let val = match kind {
@@ -235,13 +256,13 @@ impl FWMRunner {
 
                     _ => unreachable!(),
                 };
-                if self.context.set_value(*dest, val).is_none() {
+                if self.set_value(*dest, val).is_none() {
                     return FWMSignal::Signaled;
                 }
             }
 
             OPCode::Cmp([a, b]) | OPCode::Test([a, b]) => {
-                let (Some(a), Some(b)) = (self.context.get_value(*a), self.context.get_value(*b)) else {
+                let (Some(a), Some(b)) = (self.get_value(*a), self.get_value(*b)) else {
                     return FWMSignal::Signaled;
                 };
                 let v = match opcode.opcode() {
@@ -250,18 +271,18 @@ impl FWMRunner {
 
                     _ => unreachable!(),
                 };
-                self.context.set_register(RegisterKind::CMP, v);
+                self.set_register(RegisterKind::CMP, v);
             }
 
             OPCode::Write([addr, len]) => {
-                let (Some(addr), Some(len)) = (self.context.get_value(*addr), self.context.get_value(*len)) else {
+                let (Some(addr), Some(len)) = (self.get_value(*addr), self.get_value(*len)) else {
                     return FWMSignal::Signaled;
                 };
                 let (addr, len) = (addr as usize, len as usize);
-                if addr + len > self.context.global.stack.len() {
+                if addr + len > self.global.stack.len() {
                     return FWMSignal::Signaled;
                 }
-                data = Some(&self.context.global.stack[addr..addr + len]);
+                data = Some(&self.global.stack[addr..addr + len]);
             }
         };
 
@@ -270,5 +291,88 @@ impl FWMRunner {
         } else {
             FWMSignal::Continue
         }
+    }
+
+    #[inline(always)]
+    fn get_pos(&self) -> u64 {
+        self.get_local().pos as u64
+    }
+    #[inline(always)]
+    fn set_pos(&mut self, v: u64) {
+        self.get_local_mut().pos = v as usize;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::Parser;
+
+    fn parse_code(s: &[u8]) -> Vec<OPCode> {
+        Parser::new(s)
+            .into_iter()
+            .map(|f| {
+                f.map(|r| OPCodeKind::from_raw(r.opcode).and_then(|o| o.to_opcode(&r.args)))
+                    .ok()
+            })
+            .flatten()
+            .map(Option::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn calculator() {
+        // Simple calculator thats should print `0x70`
+        #[rustfmt::skip]
+        let fragment = parse_code(&[
+            0x20, 0x00, 0xC2, 0x00, 0x00, 0x00, 0x05,
+            0x41, 0x00, 0x00, 0xC0, 0x00,
+            0x20, 0x02, 0xC2, 0x00, 0x00, 0x00, 0x04,
+            0x00, 0x00,
+            0x00, 0x01,
+            0x40, 0x00, 0x00, 0xC0, 0x30,
+            0x40, 0x00, 0x01, 0xC0, 0x40,
+            0x20, 0x00, 0xC2, 0x00, 0x00, 0x00, 0x0A,
+            0x20, 0x00, 0xC2, 0x00, 0x00, 0x00, 0x0E,
+            0x00, 0x02,
+            0x40, 0x04, 0x07, 0xC0, 0x08,
+            0x40, 0x00, 0x97, 0x08, 0x00,
+            0x40, 0x04, 0x00, 0x01,
+            0x00, 0x02,
+            0x40, 0x04, 0x07, 0xC0, 0x12,
+            0x40, 0x00, 0x10, 0x07,
+            0x40, 0x00, 0x11, 0x00,
+            0x40, 0x0C, 0x11, 0xC0, 0x0F,
+            0x41, 0x00, 0x11, 0xC0, 0x0A,
+            0x20, 0x06, 0xC2, 0x00, 0x00, 0x00, 0x16,
+            0x40, 0x04, 0x11, 0xC0, 0x30,
+            0x20, 0x01, 0xC2, 0x00, 0x00, 0x00, 0x17,
+            0x40, 0x04, 0x11, 0xC0, 0x6E,
+            0x40, 0x03, 0x70, 0x00, 0x11,
+            0x40, 0x05, 0x10, 0xC0, 0x01,
+            0x40, 0x0A, 0x00, 0xC0, 0x04,
+            0x41, 0x00, 0x00, 0xC0, 0x00,
+            0x20, 0x03, 0xC2, 0x00, 0x00, 0x00, 0x10,
+            0x40, 0x03, 0x70, 0x00, 0xC0, 0x78,
+            0x40, 0x03, 0xA0, 0x01, 0xC0, 0x30,
+            0x40, 0x05, 0x10, 0xC0, 0x01,
+            0x40, 0x04, 0x07, 0xC0, 0x01,
+            0x41, 0x00, 0x10, 0x07,
+            0x4F, 0x00, 0x10, 0x1A,
+            0x00, 0x02,
+        ]);
+
+        let mut fwm = FWMRunner::new(fragment);
+        let mut data = Vec::new();
+        loop {
+            let pos = fwm.context.get_pos();
+            match fwm.run() {
+                FWMSignal::Continue => (),
+                FWMSignal::Data(u) => data.extend_from_slice(u),
+                FWMSignal::EOF => break,
+                s => panic!("Got signal {s:?} at {}", pos),
+            }
+        }
+        assert_eq!(data, b"0x70");
     }
 }
